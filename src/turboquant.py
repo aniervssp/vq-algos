@@ -26,7 +26,7 @@ class TurboQuantMSE(VectorQuantizer):
 
     def dequantize(self, idx: np.ndarray[np.uint8]):
         X = self.centroids[idx]
-        return X @ self.pi.transpose
+        return X @ self.pi.T
 
 class QJL:
     def __init__(self, dim):
@@ -55,6 +55,6 @@ class TurboQuantProd(VectorQuantizer):
         return (idx, qjl_codes, gamma)
 
     def dequantize(self, idx, qjl, gamma):
-        X_mse = self.turbo_quant_mse.dequantize(idx)
+        X_mse = self.quant_mse.dequantize(idx)
         X_qjl = self.qjl.dequantize(qjl) * gamma[:, np.newaxis]
         return X_mse + X_qjl
