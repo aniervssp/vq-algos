@@ -2,16 +2,33 @@ from base import VectorQuantizer
 import numpy as np 
 import rotations
 import math 
+from tqdm import tqdm 
+from scipy.integrate import quad
+from scipy.special import gamma
+
+def max_lloyd(pdf_func, k: int, low: float, high: float, max_iter: int = 100):
+    boundaries = np.linspace(low, high, k + 1)
+
+    centroids = (boundaries[1:] + boundaries[:-1])/2
+    for _ in tqdm(range(max_iter)):
+        for i in range(k):
+            a = boundaries[i]
+            b = boundaries[i + 1]
+            centroids[i] = quad(lambda x : x * pdf_func(x), a, b)[0] / quad(pdf_func, a, b)[0]
+
+        boundaries[1:-1] = (centroids[:-1] + centroids[1:]) / 2
+        boundaries[0] = low 
+        boundaries[-1] = high
+
+    return centroids 
 
 class TurboQuantMSE(VectorQuantizer):
     def __init__(self, dim: int, bit_width: int):
         super().__init__(dim, bit_width)
         self.pi = rotations.generate_rotation_matrix(dim)
         k = 1<<bit_width # number of clusters
-        self.centroids = np.random.random(k) * 2 - 1 # for now just random in [-1, 1]
-        # but in reality it's actually the solutions to equation (4) in the turboquant paper
-        # missing constructing the codebook to find the centroids
-        # ...
+        pdf = lambda x : gamma(dim / 2) / (math.sqrt(math.pi) * gamma((dim - 1)/2)) * (1 - x*x)**((dim - 3)/2)
+        self.centroids = max_lloyd(pdf, k, -1, 1)
 
     def quantize(self, X: np.ndarray):
         _, d = X.shape
