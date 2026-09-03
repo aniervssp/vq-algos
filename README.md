@@ -10,6 +10,14 @@ References:
 - [RabitQ Paper](https://arxiv.org/abs/2405.12497)
 - [RabitQ vs TurboQuant](https://arxiv.org/abs/2604.19528)
 
-### Plot of the MSE distorion of the QuantMSE algorithm for different bit widths
+### Figures
 
 <img src="eval_quant_mse.png" />
+
+### TODO
+
+- [ ] evaluate the inner product distortion
+
+- [ ] add an implementation of rabitQ and compare
+- [ ] measure memory gains
+- [ ] measure speed overhead
