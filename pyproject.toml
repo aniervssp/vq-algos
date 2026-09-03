@@ -3,9 +3,16 @@ name = "turbo-quant-implm"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
+authors = [
+    { name = "Anier Velasco", email = "anier.velasco@strategicplatform.com" }
+]
 requires-python = ">=3.14"
 dependencies = [
+    "datasets>=5.0.1",
+    "matplotlib>=3.11.1",
     "numpy>=2.5.2",
+    "polars>=1.44.1",
+    "ruff>=0.16.5",
     "scipy>=1.18.1",
     "tqdm>=4.70.0",
 ]

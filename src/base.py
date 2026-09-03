@@ -1,5 +1,6 @@
-import numpy as np 
+import numpy as np
 from abc import ABC, abstractmethod
+
 
 class VectorQuantizer(ABC):
     def __init__(self, dim: int, bit_width: int):
