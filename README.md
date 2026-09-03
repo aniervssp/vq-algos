@@ -10,3 +10,6 @@ References:
 - [RabitQ Paper](https://arxiv.org/abs/2405.12497)
 - [RabitQ vs TurboQuant](https://arxiv.org/abs/2604.19528)
 
+### Plot of the MSE distorion of the QuantMSE algorithm for different bit widths
+
+<img src="eval_quant_mse.png" />
