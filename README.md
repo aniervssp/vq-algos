@@ -58,6 +58,41 @@ Multiplicative bias of the inner-product estimate confirms the two-stage design:
 `TurboQuantProd` stays flat at 0.978–1.008 across all bit-widths, while
 `TurboQuantMSE` climbs 0.641 → 0.997 as its bias shrinks with `b`.
 
+### Memory footprint
+
+`quantize` emits exactly `bit_width` bits per coordinate — the bit-width the paper's
+`b` refers to — using the primitives in [`src/packing.py`](src/packing.py). There is no
+separate packing step to remember, so `codes.nbytes` is the real number. Bytes per
+vector, against a float32 baseline of 400:
+
+| b | `TurboQuantMSE` | bits/coord | vs float32 | `TurboQuantProd` | idx | signs | norm | bits/coord | vs float32 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | **13** | 1.04 | 30.8× | **17** | 0 | 13 | 4 | 1.36 | 23.5× |
+| 2 | **25** | 2.00 | 16.0× | **30** | 13 | 13 | 4 | 2.40 | 13.3× |
+| 3 | **38** | 3.04 | 10.5× | **42** | 25 | 13 | 4 | 3.36 | 9.5× |
+| 4 | **50** | 4.00 | 8.0× | **55** | 38 | 13 | 4 | 4.40 | 7.3× |
+| 5 | **63** | 5.04 | 6.3× | **67** | 50 | 13 | 4 | 5.36 | 6.0× |
+
+`TurboQuantProd` returns a `ProdCodes` named tuple — packed indices, packed QJL signs,
+and one float32 residual norm — mirroring Algorithm 2's `output: (idx, qjl, ‖r‖₂)`.
+Overhead above the nominal `b·d` bits is the norm (0.32 bits/coord at d = 100) plus
+byte alignment (≤ 0.04). At b = 1 the index array is genuinely empty: the `b−1 = 0` bit
+MSE stage has a single centroid at the origin and carries no information.
+
+A uint8 array still appears inside `quantize`, because `np.packbits` consumes uint8 —
+but it is a local intermediate, never the stored representation. For reference, the
+earlier `np.concat` into float64 cost 1608 bytes/vector, four times *larger* than the
+unquantized input.
+
+The one lossy step is storing `‖r‖₂` in float32, worth at most `1.9e-08` of
+reconstruction error — seven orders of magnitude below the quantization distortion, and
+consistent with the paper (§1.3 stores L2 norms in floating point). Distortions are
+unchanged to five decimals by the switch to packed codes.
+
+**Cost.** Packing sits in the hot path, so `dequantize` now unpacks on every call —
+25 ms per 5000 vectors for `TurboQuantMSE` and 39 ms for `TurboQuantProd` at b = 5,
+against 2.5 ms when codes were held unpacked. The full eval still runs in ~20 s.
+
 ### Reading the metrics
 
 The two distortions (paper Eqs. 1–2) are **expectations over the quantizer's own
@@ -144,10 +179,15 @@ put for the two-stage one.
 inner product; on this dataset the standard deviation is flat and it is the mean that
 scales. The growth in total squared error is the same either way.)
 
+**Storage footprint** — bytes per vector by representation, and distortion against the
+bits *actually stored* rather than the nominal bit-width.
+
+<img src="src/memory_footprint.png" />
+
 ### TODO
 - [x] evaluate errors across several fixed, reproducible seeds and average the results
 - [x] validate the empirical distortions against the paper's theoretical bounds
 - [x] reproduce the paper's error-distribution figures (Figs. 1 and 2)
 - [ ] add an implementation of rabitQ and compare
-- [ ] measure memory gains
+- [x] measure memory gains (bit-packed storage in `src/packing.py`)
 - [ ] measure speed overhead

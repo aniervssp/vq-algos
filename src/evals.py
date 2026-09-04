@@ -263,6 +263,94 @@ def make_error_vs_inner_product_plots(
     fig.savefig("error_vs_inner_product.png", dpi=120)
 
 
+def measure_memory(X, bit_widths, metrics_mse, metrics_prod, seed=RANDOM_SEED):
+    """Storage footprint of the packed codes that `quantize` now emits.
+
+    Both quantizers return exactly bit_width bits per coordinate (TurboQuantProd
+    plus one float32 residual norm per vector), so `.nbytes` is the real number --
+    no separate packing step to remember.
+    """
+    n, d = X.shape
+    raw_bytes = 4 * d  # float32 baseline, per vector
+    rows = []
+
+    for i, b in enumerate(bit_widths):
+        np.random.seed(seed)
+        quant_mse = TurboQuantMSE(dim=d, bit_width=b)
+        codes_mse = quant_mse.quantize(X)
+
+        np.random.seed(seed)
+        quant_prod = TurboQuantProd(dim=d, bit_width=b)
+        codes_prod = quant_prod.quantize(X)
+
+        rows.append(
+            {
+                "b": int(b),
+                "mse_bytes": codes_mse.nbytes / n,
+                "mse_distortion": metrics_mse["mse_distortions"][i],
+                "prod_bytes": codes_prod.nbytes / n,
+                "prod_idx": codes_prod.idx.nbytes / n,
+                "prod_signs": codes_prod.signs.nbytes / n,
+                "prod_norms": codes_prod.norms.nbytes / n,
+                "prod_distortion": metrics_prod["inner_prod_errors"][i],
+            }
+        )
+
+    print(f"\nStorage footprint, bytes per vector (n = {n}, d = {d})")
+    print(f"  float32, unquantized: {raw_bytes}\n")
+    print(
+        f"{'b':>2} | {'MSE':>6} {'bits/coord':>11} {'vs f32':>7}"
+        f" | {'Prod':>6} {'idx':>5} {'signs':>6} {'norm':>5} {'bits/coord':>11} {'vs f32':>7}"
+    )
+    for r in rows:
+        print(
+            f"{r['b']:>2} | {r['mse_bytes']:6.1f} {r['mse_bytes'] * 8 / d:11.2f} "
+            f"{raw_bytes / r['mse_bytes']:6.1f}x"
+            f" | {r['prod_bytes']:6.1f} {r['prod_idx']:5.1f} {r['prod_signs']:6.1f} "
+            f"{r['prod_norms']:5.1f} {r['prod_bytes'] * 8 / d:11.2f} "
+            f"{raw_bytes / r['prod_bytes']:6.1f}x"
+        )
+
+    make_memory_plot(rows, raw_bytes, d)
+    return rows
+
+
+def make_memory_plot(rows, raw_bytes, d):
+    bit_widths = [r["b"] for r in rows]
+    fig, (size_ax, rate_ax) = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle("Storage Footprint", fontsize=16)
+
+    size_ax.axhline(raw_bytes, color="black", linestyle=":", label="float32, unquantized")
+    size_ax.axhline(8 * (2 * d + 1), color="gray", linestyle=":",
+                    label="float64 concat (previous representation)")
+    size_ax.plot(bit_widths, [r["mse_bytes"] for r in rows], marker="o",
+                 color="C0", label="TurboQuantMSE")
+    size_ax.plot(bit_widths, [r["prod_bytes"] for r in rows], marker="o",
+                 color="C1", label="TurboQuantProd")
+    size_ax.set_yscale("log")
+    size_ax.set_xlabel("Bit-widths")
+    size_ax.set_ylabel("Bytes per vector")
+    size_ax.set_title("Bytes per vector vs Bit-widths")
+    size_ax.legend(fontsize=8)
+
+    rate_ax.plot([r["mse_bytes"] * 8 / d for r in rows],
+                 [r["mse_distortion"] for r in rows], marker="o", color="C0",
+                 label="TurboQuantMSE ($D_{mse}$)")
+    rate_ax.plot([r["prod_bytes"] * 8 / d for r in rows],
+                 [r["prod_distortion"] * d for r in rows], marker="o", color="C1",
+                 label="TurboQuantProd ($D_{prod}\\cdot d$)")
+    rate_ax.plot(bit_widths, [1 / 4**b for b in bit_widths], linestyle="--",
+                 color="black", label="Lower Bound ($4^{-b}$)")
+    rate_ax.set_yscale("log")
+    rate_ax.set_xlabel("Actual bits per coordinate (stored)")
+    rate_ax.set_ylabel("Distortion")
+    rate_ax.set_title("Distortion vs Bits Actually Stored")
+    rate_ax.legend(fontsize=8)
+
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig("memory_footprint.png", dpi=120)
+
+
 def load_data():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -314,6 +402,7 @@ def main():
     make_plots(bit_widths, metrics_mse, metrics_prod, upperbound_mse, lowerbound_mse, upperbound_inner_prod, lowerbound_inner_prod, sample_emb.shape[-1])
     make_error_distribution_plots(sample_emb)
     make_error_vs_inner_product_plots(sample_emb)
+    measure_memory(sample_emb, bit_widths, metrics_mse, metrics_prod)
 
     
 
