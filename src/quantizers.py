@@ -53,9 +53,9 @@ class TurboQuantMSE(VectorQuantizer):
         return X @ self.pi.T
 
 
-class QJL:
-    def __init__(self, dim):
-        self.dim = dim
+class QJL(VectorQuantizer):
+    def __init__(self, dim, bit_width: int = 1):
+        super().__init__(dim, bit_width)
         self.S = np.random.randn(dim, dim)
 
     def quantize(self, X: np.ndarray):
@@ -69,17 +69,23 @@ class TurboQuantProd(VectorQuantizer):
     def __init__(self, dim, bit_width):
         super().__init__(dim, bit_width)
         self.quant_mse = TurboQuantMSE(dim, bit_width - 1)
-        self.qjl = QJL(dim)
+        self.qjl = QJL(dim, 1)
 
     def quantize(self, X: np.ndarray):
         idx = self.quant_mse.quantize(X)
         X_approx = self.quant_mse.dequantize(idx)
         r = X - X_approx
         qjl_codes = self.qjl.quantize(r)
-        gamma = np.linalg.norm(r, axis=-1)
-        return (idx, qjl_codes, gamma)
+        gamma = np.linalg.norm(r, axis=-1, keepdims=True)
 
-    def dequantize(self, idx, qjl, gamma):
+        result = np.concat([idx, qjl_codes, gamma], axis=-1)
+
+        return result
+
+    def dequantize(self, codes: np.ndarray):
+        idx = codes[..., :self.dim].astype(np.uint8)
+        qjl = codes[..., self.dim : self.dim * 2]
+        gamma = codes[..., self.dim*2:]
         X_mse = self.quant_mse.dequantize(idx)
-        X_qjl = self.qjl.dequantize(qjl) * gamma[:, np.newaxis]
+        X_qjl = self.qjl.dequantize(qjl) * gamma
         return X_mse + X_qjl
