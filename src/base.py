@@ -12,5 +12,5 @@ class VectorQuantizer(ABC):
         pass
 
     @abstractmethod
-    def dequantize(self, codes):
+    def dequantize(self, codes: np.ndarray):
         pass

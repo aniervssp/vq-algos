@@ -10,4 +10,4 @@ def generate_rotation_matrix(dim: int):
 
     q, r = np.linalg.qr(random_matrix)
 
-    return q
+    return q * np.sign(np.diag(r))

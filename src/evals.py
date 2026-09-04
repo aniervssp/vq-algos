@@ -18,6 +18,7 @@ def eval_quant_model(X, bit_widths, model, seeds=EVALUATION_SEEDS):
 
     per_seed_metrics = []
     inner_prods = X @ X.T
+    off_diag = ~np.eye(X.shape[0], dtype=bool)
 
     for seed in seeds:
         np.random.seed(seed)
@@ -32,17 +33,15 @@ def eval_quant_model(X, bit_widths, model, seeds=EVALUATION_SEEDS):
             X_approx = quant_model.dequantize(idx)
 
             vector_mse = np.sum((X - X_approx) ** 2, axis=-1)
-            mse_distortions.append(np.max(vector_mse))
+            mse_distortions.append(np.mean(vector_mse))
 
             inner_prods_approx = X @ X_approx.T
-            inner_prod_errors_by_row = np.sum(
-                (inner_prods - inner_prods_approx) ** 2, axis=-1
-            )
+            sq_errors = (inner_prods - inner_prods_approx) ** 2
 
             inner_prod_mult_bias.append(
-                np.mean(inner_prods_approx) / np.mean(inner_prods)
+                np.mean(inner_prods_approx[off_diag]) / np.mean(inner_prods[off_diag])
             )
-            inner_prod_errors.append(np.max(inner_prod_errors_by_row))
+            inner_prod_errors.append(np.mean(sq_errors[off_diag]))
 
         per_seed_metrics.append(
             [mse_distortions, inner_prod_mult_bias, inner_prod_errors]
@@ -93,7 +92,7 @@ def make_plots(bit_widths, metrics_mse: dict, metrics_prod: dict, upperbound_mse
     inner_prod_ax.set_yscale("log")
 
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig("eval_quant_mse.png")
+    fig.savefig("eval_turboquant.png")
 
 
 
