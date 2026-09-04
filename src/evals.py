@@ -92,7 +92,7 @@ def make_plots(bit_widths, metrics_mse: dict, metrics_prod: dict, upperbound_mse
     inner_prod_ax.set_yscale("log")
 
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig("eval_quant_mse.png")
+    fig.savefig("eval_turboquant.png")
 
 
 
