@@ -1,46 +1,61 @@
-import numpy as np
-from quantizers import TurboQuantMSE, TurboQuantProd
-from datasets import load_dataset
-import matplotlib.pyplot as plt
-import math 
+import math
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
+from datasets import load_dataset
+
+from quantizers import TurboQuantMSE, TurboQuantProd
+
 RANDOM_SEED = 42
+EVALUATION_SEEDS = (42, 43, 44, 45, 46)
 CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 DATA_CACHE = CACHE_DIR / "glove_embeddings.npy"
 SAMPLE_CACHE = CACHE_DIR / "glove_sample_5000.npy"
 
-def eval_quant_model(X, bit_widths, model):
+def eval_quant_model(X, bit_widths, model, seeds=EVALUATION_SEEDS):
     d = X.shape[-1]
 
-    mse_distortions = []
-    inner_prod_mult_bias = []
-    inner_prod_errors = []
+    per_seed_metrics = []
+    inner_prods = X @ X.T
 
-    for b in bit_widths:
-        quant_model = model(dim=d, bit_width=b)
-        idx = quant_model.quantize(X)
+    for seed in seeds:
+        np.random.seed(seed)
+        mse_distortions = []
+        inner_prod_mult_bias = []
+        inner_prod_errors = []
 
-        X_approx = quant_model.dequantize(idx)
+        for b in bit_widths:
+            quant_model = model(dim=d, bit_width=b)
+            idx = quant_model.quantize(X)
 
-        mse = np.mean(np.sum((X - X_approx) ** 2, axis=-1))
-        mse_distortions.append(mse)
+            X_approx = quant_model.dequantize(idx)
 
-        inner_prods = X @ X.T 
-        inner_prods_approx = X @ X_approx.T
+            vector_mse = np.sum((X - X_approx) ** 2, axis=-1)
+            mse_distortions.append(np.max(vector_mse))
 
-        inner_prod_mean_err = np.mean(np.abs(inner_prods - inner_prods_approx))
+            inner_prods_approx = X @ X_approx.T
+            inner_prod_errors_by_row = np.sum(
+                (inner_prods - inner_prods_approx) ** 2, axis=-1
+            )
 
-        inner_prod_mult_bias.append(
-            np.mean(inner_prods_approx) / np.mean(inner_prods)
+            inner_prod_mult_bias.append(
+                np.mean(inner_prods_approx) / np.mean(inner_prods)
+            )
+            inner_prod_errors.append(np.max(inner_prod_errors_by_row))
+
+        per_seed_metrics.append(
+            [mse_distortions, inner_prod_mult_bias, inner_prod_errors]
         )
 
-        inner_prod_errors.append(inner_prod_mean_err)
-
-    return {    
-        "mse_distortions": mse_distortions,
-        "inner_prod_mult_bias": inner_prod_mult_bias,
-        "inner_prod_errors": inner_prod_errors,
+    return {
+        "mse_distortions": np.mean([metrics[0] for metrics in per_seed_metrics], axis=0),
+        "inner_prod_mult_bias": np.mean(
+            [metrics[1] for metrics in per_seed_metrics], axis=0
+        ),
+        "inner_prod_errors": np.mean(
+            [metrics[2] for metrics in per_seed_metrics], axis=0
+        ),
     }
 
 
@@ -122,9 +137,13 @@ def main():
     upperbound_mse = lambda b, d : math.sqrt(3) * math.pi / (2 * (4**b))
     lowerbound_inner_prod = lambda b, d : 1/(d * 4**b)
     upperbound_inner_prod = lambda b, d : math.sqrt(3) * math.pi**2/(d * 4**b)
-    
-    metrics_mse = eval_quant_model(sample_emb, bit_widths, TurboQuantMSE)
-    metrics_prod = eval_quant_model(sample_emb, bit_widths, TurboQuantProd)
+
+    metrics_mse = eval_quant_model(
+        sample_emb, bit_widths, TurboQuantMSE, EVALUATION_SEEDS
+    )
+    metrics_prod = eval_quant_model(
+        sample_emb, bit_widths, TurboQuantProd, EVALUATION_SEEDS
+    )
 
     make_plots(bit_widths, metrics_mse, metrics_prod, upperbound_mse, lowerbound_mse, upperbound_inner_prod, lowerbound_inner_prod, sample_emb.shape[-1])
 
