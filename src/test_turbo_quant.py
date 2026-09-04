@@ -13,11 +13,11 @@ def test_turbo_quant_mse():
     X = np.random.randn(n, dim)
 
     quantizer = TurboQuantMSE(dim, bit_width)
-    idx = quantizer.quantize(X)
-    assert idx.shape == (n, dim)
-    assert idx.dtype == np.uint8
+    codes = quantizer.quantize(X)
+    assert codes.shape == (n, -(-bit_width * dim // 8))  # bit_width bits per coordinate
+    assert codes.dtype == np.uint8
 
-    X_approx = quantizer.dequantize(idx)
+    X_approx = quantizer.dequantize(codes)
     assert X_approx.shape == (n, dim)
 
 
@@ -43,7 +43,11 @@ def test_turbo_quant_prod():
     quantizer = TurboQuantProd(dim, bit_width)
     codes = quantizer.quantize(X)
 
-    assert codes.shape == (n, 2 * dim + 1)
+    assert codes.idx.shape == (n, -(-(bit_width - 1) * dim // 8))
+    assert codes.signs.shape == (n, -(-dim // 8))
+    assert codes.norms.shape == (n, 1)
+    assert codes.nbytes == codes.idx.nbytes + codes.signs.nbytes + codes.norms.nbytes
+
     X_approx = quantizer.dequantize(codes)
     assert X_approx.shape == (n, dim)
 
