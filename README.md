@@ -12,13 +12,10 @@ References:
 
 ### Figures
 
-<img src="eval_quant_mse.png" />
+<img src="src/eval_quant_mse.png" />
 
 ### TODO
-- [ ] fix: right now in the plot you see the empirical numbers are outside the theoretical bounds. 
-    This needs fixing. Worth remembering that the bounds are in expectations. Hence, for a more accurate evaluation, it'd be needed to run it with several seeds, and average all that.
-    Right now we're averaging over the data. Instead, we should take the worst case in the data
-    and average across all seeds.
+- [x] evaluate worst-case data errors across several fixed, reproducible seeds and average the results.
 - [ ] add an implementation of rabitQ and compare
 - [ ] measure memory gains
 - [ ] measure speed overhead
