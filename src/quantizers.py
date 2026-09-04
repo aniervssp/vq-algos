@@ -4,13 +4,14 @@ import rotations
 import math
 from scipy.integrate import quad
 from scipy.special import gamma
+import functools 
 
-
-def max_lloyd(pdf_func, k: int, low: float, high: float, max_iter: int = 100):
+def max_lloyd(pdf_func, k: int, low: float, high: float, max_iter: int = 5000, tol: float = 1e-6):
     boundaries = np.linspace(low, high, k + 1)
 
     centroids = (boundaries[1:] + boundaries[:-1]) / 2
     for _ in range(max_iter):
+        prev_centroids = centroids.copy()
         for i in range(k):
             a = boundaries[i]
             b = boundaries[i + 1]
@@ -21,21 +22,33 @@ def max_lloyd(pdf_func, k: int, low: float, high: float, max_iter: int = 100):
         boundaries[1:-1] = (centroids[:-1] + centroids[1:]) / 2
         boundaries[0] = low
         boundaries[-1] = high
+        
+        if np.max(np.abs(centroids - prev_centroids)) < tol:
+            break 
 
     return centroids
 
+@functools.cache
+def sphere_codebook(dim: int, bit_width: int) -> np.ndarray:
+    """Lloyd-Max codebook for one coordinate of a random unit vector in R^dim.
+
+    Deterministic in (dim, bit_width), so it is shared across evaluation seeds.
+    The returned array is read-only because every caller holds the same object.
+    """
+    pdf = lambda x: (
+        gamma(dim / 2)
+        / (math.sqrt(math.pi) * gamma((dim - 1) / 2))
+        * (1 - x * x) ** ((dim - 3) / 2)
+    )
+    centroids = max_lloyd(pdf, 1 << bit_width, -1.0, 1.0)
+    centroids.flags.writeable = False
+    return centroids
 
 class TurboQuantMSE(VectorQuantizer):
     def __init__(self, dim: int, bit_width: int):
         super().__init__(dim, bit_width)
         self.pi = rotations.generate_rotation_matrix(dim)
-        k = 1 << bit_width  # number of clusters
-        pdf = lambda x: (
-            gamma(dim / 2)
-            / (math.sqrt(math.pi) * gamma((dim - 1) / 2))
-            * (1 - x * x) ** ((dim - 3) / 2)
-        )
-        self.centroids = max_lloyd(pdf, k, -1, 1)
+        self.centroids = sphere_codebook(dim, bit_width)
 
     def quantize(self, X: np.ndarray):
         _, d = X.shape
@@ -48,7 +61,7 @@ class TurboQuantMSE(VectorQuantizer):
 
         return idx
 
-    def dequantize(self, idx: np.ndarray[np.uint8]):
+    def dequantize(self, idx: np.ndarray):
         X = self.centroids[idx]
         return X @ self.pi.T
 
