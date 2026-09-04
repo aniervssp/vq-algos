@@ -12,6 +12,10 @@ EVALUATION_SEEDS = (42, 43, 44, 45, 46)
 CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 DATA_CACHE = CACHE_DIR / "glove_embeddings.npy"
 SAMPLE_CACHE = CACHE_DIR / "glove_sample_5000.npy"
+FIGURE_BIT_WIDTHS = (1, 2, 3, 4)
+BUCKETED_BIT_WIDTH = 2
+INNER_PRODUCT_BUCKETS = 4
+HISTOGRAM_BINS = 120
 
 def eval_quant_model(X, bit_widths, model, seeds=EVALUATION_SEEDS):
     d = X.shape[-1]
@@ -96,6 +100,169 @@ def make_plots(bit_widths, metrics_mse: dict, metrics_prod: dict, upperbound_mse
 
 
 
+def _fit_quantizer(X, model, bit_width, seed=RANDOM_SEED):
+    np.random.seed(seed)
+    quant_model = model(dim=X.shape[-1], bit_width=bit_width)
+    return quant_model.dequantize(quant_model.quantize(X))
+
+
+def _iter_error_blocks(X, inner_prods, X_approx, block=512):
+    """Stream (true inner product, signed estimation error) over off-diagonal pairs.
+
+    Blocked so that the n x n error matrix is never materialised at once.
+    """
+    n = X.shape[0]
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        true_ip = inner_prods[start:stop]
+        errors = true_ip - X[start:stop] @ X_approx.T
+
+        keep = np.ones(errors.shape, dtype=bool)
+        rows = np.arange(stop - start)
+        keep[rows, start + rows] = False  # drop self-pairs, see README
+
+        yield true_ip[keep], errors[keep]
+
+
+def _error_range(X, inner_prods, approxes, width=4.0):
+    """Bin range wide enough for every approximation, so panels stay comparable."""
+    low, high = np.inf, -np.inf
+    for X_approx in approxes:
+        _, errors = next(_iter_error_blocks(X, inner_prods, X_approx))
+        mean, std = errors.mean(), errors.std()
+        low = min(low, mean - width * std)
+        high = max(high, mean + width * std)
+    return low, high
+
+
+def _error_histogram(X, inner_prods, X_approx, bins):
+    """Histogram counts plus the exact mean error (not clipped to the bin range)."""
+    counts = np.zeros(len(bins) - 1, dtype=np.int64)
+    total, n_pairs = 0.0, 0
+    for _, errors in _iter_error_blocks(X, inner_prods, X_approx):
+        counts += np.histogram(errors, bins=bins)[0]
+        total += errors.sum()
+        n_pairs += errors.size
+    return counts, total / n_pairs
+
+
+def _inner_product_bucket_edges(inner_prods, n_buckets, sample=2_000_000, seed=RANDOM_SEED):
+    """Quantile edges of the off-diagonal inner-product distribution."""
+    rng = np.random.default_rng(seed)
+    n = inner_prods.shape[0]
+    i = rng.integers(0, n, size=sample)
+    j = rng.integers(0, n, size=sample)
+    keep = i != j
+    return np.quantile(inner_prods[i[keep], j[keep]], np.linspace(0.0, 1.0, n_buckets + 1))
+
+
+def _bucketed_error_histogram(X, inner_prods, X_approx, bins, edges):
+    """Per-bucket histogram counts, mean true inner product, and error mean/std."""
+    n_buckets = len(edges) - 1
+    counts = np.zeros((n_buckets, len(bins) - 1), dtype=np.int64)
+    ip_sum = np.zeros(n_buckets)
+    err_sum = np.zeros(n_buckets)
+    err_sq_sum = np.zeros(n_buckets)
+    sizes = np.zeros(n_buckets, dtype=np.int64)
+
+    for true_ip, errors in _iter_error_blocks(X, inner_prods, X_approx):
+        which = np.clip(np.searchsorted(edges, true_ip, side="right") - 1, 0, n_buckets - 1)
+        for k in range(n_buckets):
+            selected = errors[which == k]
+            counts[k] += np.histogram(selected, bins=bins)[0]
+            ip_sum[k] += true_ip[which == k].sum()
+            err_sum[k] += selected.sum()
+            err_sq_sum[k] += np.square(selected).sum()
+            sizes[k] += selected.size
+
+    means = err_sum / sizes
+    return counts, ip_sum / sizes, means, np.sqrt(err_sq_sum / sizes - means**2)
+
+
+def make_error_distribution_plots(X, bit_widths=FIGURE_BIT_WIDTHS, seed=RANDOM_SEED):
+    """Paper Fig. 1 -- distribution of the signed inner-product estimation error.
+
+    TurboQuantProd stays centred on zero at every bit-width (Theorem 2's
+    unbiasedness claim); TurboQuantMSE is visibly shifted, and only recentres as
+    its multiplicative bias shrinks with b.
+    """
+    inner_prods = X @ X.T
+    models = (("TurboQuantProd", TurboQuantProd), ("TurboQuantMSE", TurboQuantMSE))
+
+    fig, axes = plt.subplots(
+        len(models), len(bit_widths), figsize=(4 * len(bit_widths), 3.4 * len(models))
+    )
+    fig.suptitle("Inner-Product Estimation Error Distribution", fontsize=16)
+
+    for col, b in enumerate(bit_widths):
+        approxes = [_fit_quantizer(X, model, b, seed) for _, model in models]
+        bins = np.linspace(*_error_range(X, inner_prods, approxes), HISTOGRAM_BINS + 1)
+
+        for row, ((name, _), X_approx) in enumerate(zip(models, approxes)):
+            counts, mean = _error_histogram(X, inner_prods, X_approx, bins)
+
+            ax = axes[row, col]
+            ax.stairs(counts, bins, fill=True, alpha=0.75, color=f"C{row}")
+            ax.axvline(0.0, color="black", linewidth=1.0)
+            ax.axvline(mean, color="crimson", linestyle="--", linewidth=1.2,
+                       label=f"mean = {mean:+.4f}")
+            ax.legend(fontsize=8, loc="upper right")
+            ax.set_title(f"{name}, b = {b}", fontsize=11)
+            ax.set_xlabel("Inner product error")
+            if col == 0:
+                ax.set_ylabel("Frequency")
+
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig("error_distribution.png", dpi=120)
+
+
+def make_error_vs_inner_product_plots(
+    X, bit_width=BUCKETED_BIT_WIDTH, n_buckets=INNER_PRODUCT_BUCKETS, seed=RANDOM_SEED
+):
+    """Paper Fig. 2 -- error spread against the true inner product, at fixed bit-width.
+
+    TurboQuantProd's error is pure variance, so it stays put across buckets;
+    TurboQuantMSE's bias is multiplicative in <y,x>, so its error drifts and widens
+    as the true inner product grows.
+    """
+    inner_prods = X @ X.T
+    models = (("TurboQuantProd", TurboQuantProd), ("TurboQuantMSE", TurboQuantMSE))
+    approxes = [_fit_quantizer(X, model, bit_width, seed) for _, model in models]
+
+    edges = _inner_product_bucket_edges(inner_prods, n_buckets)
+    bins = np.linspace(*_error_range(X, inner_prods, approxes), HISTOGRAM_BINS + 1)
+
+    fig, axes = plt.subplots(
+        len(models), n_buckets, figsize=(4 * n_buckets, 3.4 * len(models)), sharex=True
+    )
+    fig.suptitle(
+        f"Inner-Product Error vs Size of the True Inner Product (b = {bit_width})",
+        fontsize=16,
+    )
+
+    for row, ((name, _), X_approx) in enumerate(zip(models, approxes)):
+        counts, ip_means, means, stds = _bucketed_error_histogram(
+            X, inner_prods, X_approx, bins, edges
+        )
+        for col in range(n_buckets):
+            ax = axes[row, col]
+            ax.stairs(counts[col], bins, fill=True, alpha=0.75, color=f"C{row}")
+            ax.axvline(0.0, color="black", linewidth=1.0)
+            ax.axvline(means[col], color="crimson", linestyle="--", linewidth=1.2)
+            ax.set_title(
+                f"{name}\nAvg IP = {ip_means[col]:.2f}   "
+                f"mean = {means[col]:+.4f}   std = {stds[col]:.4f}",
+                fontsize=9,
+            )
+            if row == len(models) - 1:
+                ax.set_xlabel("Inner product error")
+            if col == 0:
+                ax.set_ylabel("Frequency")
+
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig("error_vs_inner_product.png", dpi=120)
+
+
 def load_data():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -145,6 +312,8 @@ def main():
     )
 
     make_plots(bit_widths, metrics_mse, metrics_prod, upperbound_mse, lowerbound_mse, upperbound_inner_prod, lowerbound_inner_prod, sample_emb.shape[-1])
+    make_error_distribution_plots(sample_emb)
+    make_error_vs_inner_product_plots(sample_emb)
 
     
 
